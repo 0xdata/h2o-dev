@@ -24,7 +24,6 @@ import java.lang.reflect.Field;
 import java.util.*;
 
 import static water.util.FrameUtils.categoricalEncoder;
-import static water.util.FrameUtils.cleanUp;
 
 /**
  * A Model models reality (hopefully).
@@ -40,7 +39,6 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
   public String[] _warnings = new String[0];
   public Distribution _dist;
   protected ScoringInfo[] scoringInfo;
-  public IcedHashMap<Key, String> _toDelete = new IcedHashMap<>();
 
 
   public interface DeepFeatures {
@@ -595,6 +593,10 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     if (_output != null)
       _output.startClock();
     _dist = isSupervised() && _output.nclasses() == 1 ? new Distribution(_parms) : null;
+    if (parms._categorical_encoding != Parameters.CategoricalEncodingScheme.AUTO) {
+      _output._origNames = parms._train.get().names();
+      _output._origDomains = parms._train.get().domains();
+    }
   }
 
   /**
@@ -832,7 +834,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
             _output._origDomains,
             _output._names,
             _output._domains,
-            _parms, expensive, computeMetrics, _output.interactions(), getToEigenVec(), _toDelete, false);
+            _parms, expensive, computeMetrics, _output.interactions(), getToEigenVec());
   }
 
   /**
@@ -845,22 +847,16 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
    * @param expensive Whether to actually do the hard work
    * @param computeMetrics Whether metrics can be (and should be) computed
    * @param interactions Column names to create pairwise interactions with
-   * @param catEncoded Whether the categorical columns of the test frame were already transformed via categorical_encoding
    */
   public static String[] adaptTestForTrain(Frame test, String[] origNames, String[][] origDomains, String[] names, String[][] domains,
-                                           Parameters parms, boolean expensive, boolean computeMetrics, String[] interactions, ToEigenVec tev,
-                                           IcedHashMap<Key, String> toDelete, boolean catEncoded) throws IllegalArgumentException {
+                                           Parameters parms, boolean expensive, boolean computeMetrics, String[] interactions, ToEigenVec tev) throws IllegalArgumentException {
     String[] msg = new String[0];
     if (test == null) return msg;
-    if (catEncoded && origNames==null) return msg;
 
     // test frame matches the training frame (after categorical encoding, if applicable)
     String[][] tdomains = test.domains();
     if (names == test._names && domains == tdomains || (Arrays.equals(names, test._names) && Arrays.deepEquals(domains, tdomains)) )
       return msg;
-
-    String[] backupNames = names;
-    String[][] backupDomains = domains;
 
     final String weights = parms._weights_column;
     final String offset = parms._offset_column;
@@ -873,24 +869,33 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
         parms._categorical_encoding == Parameters.CategoricalEncodingScheme.Eigen ||
         parms._categorical_encoding == Parameters.CategoricalEncodingScheme.Binary;
 
-    // test frame matches the user-given frame (before categorical encoding, if applicable)
-    if( checkCategoricals && origNames != null ) {
-      boolean match = Arrays.equals(origNames, test._names);
-      if (!match) {
-        match = true;
-        // In case the test set has extra columns not in the training set - check that all original pre-encoding columns are available in the test set
-        // We could be lenient here and fill missing columns with NA, but then it gets difficult to decide whether this frame is pre/post encoding, if a certain fraction of columns mismatch...
-        for (String s : origNames) {
-          match &= ArrayUtils.contains(test.names(), s);
-          if (!match) break;
+    if (origNames == null) origNames = names;
+    if (origDomains == null) origDomains = domains;
+    if (expensive && checkCategoricals && origNames != null) {
+      // find columns that need to be encoded
+      List<Vec> lv = new ArrayList<>();
+      List<String> nm = new ArrayList<>();
+      for (int i=0;i<origNames.length;++i) {
+        String name = origNames[i];
+        if (name.equals(weights) || name.equals(offset) || name.equals(fold) || name.equals(response)) continue;
+        if (origDomains[i] != null) {
+          Vec v = test.vec(name);
+          if (v != null) {
+            if (!v.isCategorical()) {
+              v = v.toCategoricalVec();
+            }
+            lv.add(v);
+            nm.add(name);
+            test.remove(name);
+          }
         }
       }
-      // still have work to do below, make sure we set the names/domains to the original user-given values such that we can do the int->enum mapping and cat. encoding below (from scratch)
-      if (match) {
-        names = origNames;
-        domains = origDomains;
-      }
+      Frame dd = new Frame(nm.toArray(new String[0]), lv.toArray(new Vec[0]));
+      Frame updated = categoricalEncoder(dd, new String[0], parms._categorical_encoding, tev);
+      Scope.track(updated);
+      test.add(updated);
     }
+    if (expensive && checkCategoricals && origNames == null) { return msg; }
 
     // create the interactions now and bolt them on to the front of the test Frame
     if( null!=interactions ) {
@@ -923,18 +928,17 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
         else if (isWeights && computeMetrics) {
           if (expensive) {
             vec = test.anyVec().makeCon(1);
-            toDelete.put(vec._key, "adapted missing vectors");
             msgs.add(H2O.technote(1, "Test/Validation dataset is missing weights column '" + names[i] + "' (needed because a response was found and metrics are to be computed): substituting in a column of 1s"));
           }
         } else if (expensive) {
           String str = "Test/Validation dataset is missing column '" + names[i] + "': substituting in a column of " + (isFold ? 0 : missing);
           vec = test.anyVec().makeCon(isFold ? 0 : missing);
-          toDelete.put(vec._key, "adapted missing vectors");
           if (!isFold) convNaN++;
           msgs.add(str);
         }
       }
-      if( vec != null ) {          // I have a column with a matching name
+      // Found a column with a matching name
+      else {
         if( domains[i] != null ) { // Model expects an categorical
           if (vec.isString())
             vec = VecUtils.stringToCategorical(vec); //turn a String column into a categorical column (we don't delete the original vec here)
@@ -942,7 +946,6 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
             CategoricalWrappedVec evec;
             try {
               evec = vec.adaptTo(domains[i]); // Convert to categorical or throw IAE
-              toDelete.put(evec._key, "categorically adapted vec");
             } catch( NumberFormatException nfe ) {
               throw new IllegalArgumentException("Test/Validation dataset has a non-categorical column '"+names[i]+"' which is categorical in the training data");
             }
@@ -967,40 +970,10 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       }
       vvecs[i] = vec;
     }
-    if( good == names.length || (response != null && test.find(response) == -1 && good == names.length - 1) )  // Only update if got something for all columns
-      test.restructure(names,vvecs,good);
-
-    boolean haveCategoricalPredictors = false;
-    if (expensive && checkCategoricals && !catEncoded) {
-      for (int i=0; i<test.numCols(); ++i) {
-        if (test.names()[i].equals(response)) continue;
-        if (test.names()[i].equals(weights)) continue;
-        if (test.names()[i].equals(offset)) continue;
-        if (test.names()[i].equals(fold)) continue;
-        // either the column of the test set is categorical (could be a numeric col that's already turned into a factor)
-        if (test.vec(i).cardinality() > 0) {
-          haveCategoricalPredictors = true;
-          break;
-        }
-        // or a equally named column of the training set is categorical, but the test column isn't (e.g., numeric column provided to be converted to a factor)
-        int whichCol = ArrayUtils.find(names, test.name(i));
-        if (whichCol >= 0 && domains[whichCol] != null) {
-          haveCategoricalPredictors = true;
-          break;
-        }
-      }
-    }
-    // check if we first need to expand categoricals before calling this method again
-    if (expensive && !catEncoded && haveCategoricalPredictors) {
-      Frame updated = categoricalEncoder(test, new String[]{weights, offset, fold, response}, parms._categorical_encoding, tev);
-      toDelete.put(updated._key, "categorically encoded frame");
-      test.restructure(updated.names(), updated.vecs()); //updated in place
-      String[] msg2 = adaptTestForTrain(test, origNames, origDomains, backupNames, backupDomains, parms, expensive, computeMetrics, interactions, tev, toDelete, true /*catEncoded*/);
-      msgs.addAll(Arrays.asList(msg2));
-      return msgs.toArray(new String[msgs.size()]);
-    }
     if( good == convNaN )
       throw new IllegalArgumentException("Test/Validation dataset has no columns in common with the training set");
+    if (expensive)
+      test.restructure(names,vvecs,names.length);
 
     return msgs.toArray(new String[msgs.size()]);
   }
@@ -1042,6 +1015,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
   }
 
   public Frame score(Frame fr, String destination_key, Job j, boolean computeMetrics) throws IllegalArgumentException {
+    Scope.enter();
     Frame adaptFr = new Frame(fr);
     computeMetrics = computeMetrics && (!isSupervised() || (adaptFr.vec(_output.responseName()) != null && !adaptFr.vec(_output.responseName()).isBad()));
     String[] msg = adaptTestForTrain(adaptFr,true, computeMetrics);   // Adapt
@@ -1074,11 +1048,17 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       Vec actual = fr.vec(_output.responseName());
       if( actual != null ) {  // Predict does not have an actual, scoring does
         String sdomain[] = actual.domain(); // Scored/test domain; can be null
-        if (sdomain != null && mdomain != sdomain && !Arrays.equals(mdomain, sdomain))
-          output.replace(0, new CategoricalWrappedVec(actual.group().addVec(), actual._rowLayout, sdomain, predicted._key));
+        if (sdomain != null && mdomain != sdomain && !Arrays.equals(mdomain, sdomain)) {
+          Vec copy = new CategoricalWrappedVec(actual.group().addVec(), actual._rowLayout, sdomain, predicted._key).makeCopy();
+          output.replace(0, copy);
+        }
       }
     }
     cleanup_adapt(adaptFr, fr);
+    Set<Key> s = new TreeSet();
+    s.addAll(Arrays.asList(output.keys()));
+    s.add(output._key);
+    Scope.exit(s.toArray(new Key[0]));
     return output;
   }
 
@@ -1329,7 +1309,6 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     if (_output._model_metrics != null)
       for( Key k : _output._model_metrics )
         k.remove(fs);
-    cleanUp(_toDelete);
     return super.remove_impl(fs);
   }
 
@@ -1589,6 +1568,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     Frame fr = new Frame(data);
     boolean computeMetrics = data.vec(_output.responseName()) != null && !data.vec(_output.responseName()).isBad();
     try {
+      Scope.enter();
       String[] warns = adaptTestForTrain(fr,true, computeMetrics);
       if( warns.length > 0 )
         System.err.println(Arrays.toString(warns));
@@ -1739,7 +1719,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
 
           // Verify the correctness of the prediction
           num_total++;
-          for (int col = genmodel.isClassifier() ? 1 : 0; col < pvecs.length; col++) {
+          for (int col = 0; col < pvecs.length; col++) {
             if (!MathUtils.compare(actual_preds[col], expected_preds[col], abs_epsilon, rel_epsilon)) {
               num_errors++;
               if (num_errors < 20) {
@@ -1758,6 +1738,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       return num_errors == 0;
     } finally {
       cleanup_adapt(fr, data);  // Remove temp keys.
+      Scope.exit();
     }
   }
 
