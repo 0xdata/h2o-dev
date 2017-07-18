@@ -17,6 +17,7 @@ h2o.example.wrapper <- function(x, y, training_frame, model_id = NULL, family = 
 # This is a version of the h2o.glm.wrapper which doesn't pass along all the args
 # Use this version until this is resolved: https://0xdata.atlassian.net/browse/PUBDEV-1558
 # beta_constraints currently causing a bug: https://0xdata.atlassian.net/browse/PUBDEV-1556
+
 h2o.glm.wrapper <- function(x, y, training_frame, model_id = NULL, 
                             validation_frame = NULL,
                             ignore_const_cols = TRUE,
@@ -75,7 +76,7 @@ h2o.glm.wrapper <- function(x, y, training_frame, model_id = NULL,
           keep_cross_validation_predictions = keep_cross_validation_predictions, 
           #beta_constraints = beta_constraints,
           #offset_column = offset_column, 
-          #weights_column = weights_column, 
+          weights_column = weights_column, 
           #intercept = intercept, 
           max_active_predictors = max_active_predictors, 
           objective_epsilon = objective_epsilon,
