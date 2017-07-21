@@ -26,7 +26,7 @@ import static org.junit.Assert.assertTrue;
 
 public class GLMTest  extends TestUtil {
 
-  @BeforeClass public static void setup() { stall_till_cloudsize(1); }
+  @BeforeClass public static void setup() { stall_till_cloudsize(5); }
 
   public static void testScoring(GLMModel m, Frame fr) {
     Scope.enter();
@@ -298,8 +298,8 @@ public class GLMTest  extends TestUtil {
       for (int i = 0; i < beta.length; ++i)
         beta[i] = 1 - 2 * rnd.nextDouble();
 
-      GLMGradientTask grtSpc = new GLMBinomialGradientTask(null,dinfo, params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
-      GLMGradientTask grtGen = new GLMGenericGradientTask(null,dinfo, params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
+      GLMGradientTask grtSpc = new GLMBinomialGradientTask(null,params._obj_reg,dinfo, params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
+      GLMGradientTask grtGen = new GLMGenericGradientTask(null,dinfo,params._obj_reg, params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
       for (int i = 0; i < beta.length; ++i)
         assertEquals("gradients differ", grtSpc._gradient[i], grtGen._gradient[i], 1e-4);
       params = new GLMParameters(Family.gaussian, Family.gaussian.defaultLink, new double[]{0}, new double[]{0}, 0, 0);
@@ -311,8 +311,8 @@ public class GLMTest  extends TestUtil {
       rnd = new Random(1987654321);
       for (int i = 0; i < beta.length; ++i)
         beta[i] = 1 - 2 * rnd.nextDouble();
-      grtSpc = new GLMGaussianGradientTask(null,dinfo, params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
-      grtGen = new GLMGenericGradientTask(null,dinfo, params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
+      grtSpc = new GLMGaussianGradientTask(null,dinfo, params._obj_reg,params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
+      grtGen = new GLMGenericGradientTask(null,dinfo, params._obj_reg, params, params._lambda[0], beta).doAll(dinfo._adaptedFrame);
       for (int i = 0; i < beta.length; ++i)
         assertEquals("gradients differ: " + Arrays.toString(grtSpc._gradient) + " != " + Arrays.toString(grtGen._gradient), grtSpc._gradient[i], grtGen._gradient[i], 1e-4);
       dinfo.remove();
@@ -652,7 +652,7 @@ public class GLMTest  extends TestUtil {
       DKV.put(fr._key, fr);
       // now check the ginfo
       DataInfo dinfo = new DataInfo(fr, null, 1, true, TransformType.NONE, DataInfo.TransformType.NONE, true, false, false, false, false, false);
-      GLMGradientTask lt = new GLMBinomialGradientTask(null,dinfo,params,0,beta).doAll(dinfo._adaptedFrame);
+      GLMGradientTask lt = new GLMBinomialGradientTask(null,params._obj_reg,dinfo,params,0,beta).doAll(dinfo._adaptedFrame);
       double [] grad = lt._gradient;
       String [] names = model.dinfo().coefNames();
       BufferedString tmpStr = new BufferedString();
@@ -833,7 +833,7 @@ public class GLMTest  extends TestUtil {
       fr.add("CAPSULE", fr.remove("CAPSULE"));
       // now check the ginfo
       DataInfo dinfo = new DataInfo(fr, null, 1, true, TransformType.NONE, DataInfo.TransformType.NONE, true, false, false, false, false, false);
-      GLMGradientTask lt = new GLMBinomialGradientTask(null,dinfo, params, 0, beta_1).doAll(dinfo._adaptedFrame);
+      GLMGradientTask lt = new GLMBinomialGradientTask(null,params._obj_reg, dinfo,params, 0, beta_1).doAll(dinfo._adaptedFrame);
       double[] grad = lt._gradient;
       for (int i = 0; i < beta_1.length; ++i)
         assertEquals(0, grad[i] + betaConstraints.vec("rho").at(i) * (beta_1[i] - betaConstraints.vec("beta_given").at(i)), 1e-4);
@@ -1194,7 +1194,7 @@ public class GLMTest  extends TestUtil {
       params._valid = fr._key;
       params._lambda = new double[] {0.01};//null; //new double[]{0.02934};//{0.02934494}; // null;
       params._alpha = new double[]{1};
-      params._standardize = false;
+      params._standardize = true;
       params._solver = Solver.COORDINATE_DESCENT_NAIVE;
       params._lambda_search = true;
       params._nlambdas = 5;
@@ -1251,36 +1251,98 @@ public class GLMTest  extends TestUtil {
 
 
   @Test
-  public void test_COD_Airlines_LambdaSearch() {
-    GLMModel model1 = null;
-    Frame fr = parse_test_file(Key.make("Airlines"), "smalldata/airlines/AirlinesTrain.csv.zip"); //  Distance + Origin + Dest + UniqueCarrier
-    String[] ignoredCols = new String[]{"IsDepDelayed_REC"};
+  public void test_lambda_search_airlines() {
+    GLMModel model1 = null, model2 = null;
+    Frame frCC = parse_test_file(Key.make("AirlinesCC"), "smalldata/airlines/AirlinesTrain.csv.zip"); //  Distance + Origin + Dest + UniqueCarrier
+    Frame frMM = parse_test_file(Key.make("AirlinesMM"), "smalldata/airlines/AirlinesTrainMM.csv.zip");
+    frMM.add("IsDepDelayed_REC",frMM.makeCompatible(new Frame(frCC.vec("IsDepDelayed_REC")))[0]);
+    Random rnd = new Random(12345678);
+    // insert some NAs
+    for(int i = 0; i < frCC.numCols()-2; ++i){
+      Vec.Writer w = frCC.vec(i).open();
+      for(int j = 0; j < (frCC.numRows() >> 6);j++)
+        w.setNA(rnd.nextInt((int)frCC.numRows()));
+      w.close();
+    }
+    for(int i = 0; i < frMM.numCols()-2; ++i){
+      Vec.Writer w = frMM.vec(i).open();
+      for(int j = 0; j < (frCC.numRows() >> 6);j++)
+        w.setNA(rnd.nextInt((int)frCC.numRows()));
+      w.close();
+    }
+    Frame frSC = frMM.deepCopy("frSC");
+    DKV.put(frSC);
+    frSC.add("Origin_CAT_REC",frMM.makeCompatible(new Frame(frCC.vec("Origin")))[0]);
+    frSC.add("Dest_CAT_REC",frMM.makeCompatible(new Frame(frCC.vec("Dest")))[0]);
+    double ratio = .05;
+    Scope.enter();
+    rnd = new Random(System.currentTimeMillis());
     try {
-      Scope.enter();
-      GLMParameters params = new GLMParameters(Family.binomial);
-      params._response_column = "IsDepDelayed";
-      params._ignored_columns = ignoredCols;
-      params._train = fr._key;
-      params._valid = fr._key;
-      params._lambda = null; // new double [] {0.25};
-      params._alpha = new double[]{1};
-      params._standardize = false;
-      params._solver = Solver.COORDINATE_DESCENT_NAIVE;//IRLSM
-      params._lambda_search = true;
-      params._nlambdas = 5;
-      GLM glm = new GLM( params);
-      model1 = glm.trainModel().get();
-      GLMModel.Submodel sm = model1._output._submodels[model1._output._submodels.length-1];
-      double [] beta = sm.beta;
-      System.out.println("lambda " + sm.lambda_value);
-      double l1pen = ArrayUtils.l1norm(beta,true);
-      double l2pen = ArrayUtils.l2norm2(beta,true);
-//      double objective = job.likelihood()/model1._nobs + // gives likelihood of the last lambda
-//              params._l2pen[params._l2pen.length-1]*params._alpha[0]*l1pen + params._l2pen[params._l2pen.length-1]*(1-params._alpha[0])*l2pen/2  ;
-//      assertEquals(0.65689, objective,1e-4);
+      for(Solver slvr: Solver.values()) {
+        for (double alpha : new double[]{0, .5, 1}) {
+          for (Frame fr : new Frame[]{frSC,frCC, frMM}) {
+            // run COD_NAIVE
+            for (Family f : new Family[]{Family.gaussian,Family.binomial}) {
+              double r = rnd.nextDouble();
+              if(r >= ratio) continue;
+              String[] ignoredCols = f == Family.binomial?new String[]{"IsDepDelayed_REC"}:new String[]{"IsDepDelayed"};
+              GLMParameters params = new GLMParameters(f);
+              params._response_column = f == Family.binomial?"IsDepDelayed":"IsDepDelayed_REC";
+              params._ignored_columns = ignoredCols;
+              params._train = fr._key;
+              params._valid = fr._key;
+              params._lambda = null; // new double [] {0.25};
+              params._alpha = new double[]{alpha};
+              params._standardize = true;
+              params._solver = slvr;
+              params._lambda_search = true;
+              params._objective_epsilon = 1e-6;
+              GLM glm = new GLM(params);
+              model1 = glm.trainModel().get();
+              // compare the models
+              GLMModel.Submodel[] sm1 = model1._output._submodels;
+              for (int i = 0; i < sm1.length; i++) {
+                double lambda = sm1[i].lambda_value;
+                if(rnd.nextDouble() > ratio) continue;
+                System.out.println("====================================================================================================");
+                System.out.println(i + ": solver = " + slvr + " alpha = " + alpha + " lambda = " + lambda + " frame = " + fr._key + " family = " + f);
+                System.out.println("====================================================================================================");
+                GLMParameters parms2 = (GLMParameters) params.clone();
+                parms2._solver = Solver.AUTO;
+                parms2._lambda = new double[]{lambda};
+                parms2._lambda_search = false;
+                parms2._beta_epsilon = 1e-5;
+                parms2._objective_epsilon = 1e-8;
+                model2 = new GLM(parms2).trainModel().get();
+                double[] beta = f == Family.multinomial ? ArrayUtils.flat(model2._output.getNormBetaMultinomial()) : model2._output.getNormBeta();
+                double[] beta_ls = sm1[i].getBeta(new double [beta.length]);
+                System.out.println(ArrayUtils.pprint(new double[][]{beta, beta_ls}));
+                // Can't compare beta here, have to compare objective value
+                double res_dev_ls = model1._nobs*sm1[i].devianceTrain;
+                double likelihood_ls = .5 * res_dev_ls;
+                double likelihood = .5 * ((GLMMetrics) model2._output._training_metrics).residual_deviance();
+                double nobs = model1._nobs;
+                double obj_ls = likelihood_ls / nobs + ((1 - alpha) * lambda * .5 * ArrayUtils.l2norm2(beta_ls, true)) + alpha * lambda * ArrayUtils.l1norm(beta_ls, true);
+                double obj = likelihood / nobs + ((1 - alpha) * lambda * .5 * ArrayUtils.l2norm2(beta, true)) + alpha * lambda * ArrayUtils.l1norm(beta, true);
+                Assert.assertEquals(obj,obj_ls,obj_ls*1e-2);
+                System.out.println("obj    " + obj);
+                System.out.println("obj_ls " + obj_ls);
+                double epsilon = slvr == Solver.L_BFGS?5e-3*obj:1e-3*obj;
+                Assert.assertTrue(obj_ls < obj + epsilon);
+                model2.delete();
+              }
+              model1.delete();
+            }
+          }
+        }
+      }
     } finally {
-      fr.delete();
+      frCC.delete();
+      frMM.delete();
+      frSC.delete();
       if (model1 != null) model1.delete();
+      if(model2 != null) model2.delete();
+      Scope.exit();
     }
   }
 
@@ -1468,6 +1530,7 @@ public class GLMTest  extends TestUtil {
 //      params._missing_values_handling = MissingValuesHandling.Skip;
       GLM glm = new GLM(params);
       model = glm.trainModel().get();
+      System.out.println("iter = " + model._output.bestSubmodel().iteration);
       assertTrue(model._output.bestSubmodel().iteration == 5);
       model.delete();
       params._max_iterations = 4;
@@ -1805,7 +1868,8 @@ public class GLMTest  extends TestUtil {
       params._max_iterations = 100000;
       params._max_active_predictors = 10000;
       params._alpha = new double[]{1};
-      for(Solver s: new Solver[]{Solver.IRLSM, Solver.COORDINATE_DESCENT}){//Solver.COORDINATE_DESCENT,}) { // LBFGS lambda-search is too slow now
+      for(Solver s: new Solver[]{Solver.COORDINATE_DESCENT_NAIVE/*,Solver.IRLSM,Solver.COORDINATE_DESCENT*/}){// LBFGS lambda-search is too slow now
+        long t0 = System.currentTimeMillis();
         params._solver = s;
         GLM glm = new GLM( params, modelKey);
         glm.trainModel().get();
@@ -1815,9 +1879,10 @@ public class GLMTest  extends TestUtil {
         assertEquals(params._nlambdas, model._output._submodels.length);
         System.out.println(model._output._training_metrics);
         // assert on the quality of the result, technically should compare objective value, but this should be good enough for now
+        System.out.println("Solver " + s + " done in " + (System.currentTimeMillis()-t0) + "ms");
       }
       model.delete();
-      params._solver = Solver.COORDINATE_DESCENT;
+/*      params._solver = Solver.COORDINATE_DESCENT;
       params._max_active_predictors = 100;
       params._lambda_min_ratio = 1e-2;
       params._nlambdas = 100;
@@ -1843,7 +1908,7 @@ public class GLMTest  extends TestUtil {
       // assert on that we got all submodels (if strong rules work, we should be able to get the results with this many active predictors)
       System.out.println(model._output._training_metrics);
       System.out.println("============================================================================================================");
-      model.delete();
+      model.delete();*/
     } finally {
       fr.delete();
       if(model != null)model.delete();
