@@ -2,6 +2,7 @@ package hex.schemas;
 
 import hex.DataInfo;
 import hex.pca.PCA;
+import hex.pca.PCAImplementation;
 import hex.pca.PCAModel.PCAParameters;
 import water.api.API;
 import water.api.schemas3.ModelParametersSchemaV3;
@@ -18,6 +19,7 @@ public class PCAV3 extends ModelBuilderSchema<PCA,PCAV3,PCAV3.PCAParametersV3> {
       "score_each_iteration",
       "transform",
       "pca_method",
+      "pca_implementation",
       "k",
       "max_iterations",
       "use_all_factor_levels",
@@ -32,7 +34,10 @@ public class PCAV3 extends ModelBuilderSchema<PCA,PCAV3,PCAV3.PCAParametersV3> {
 
     @API(help = "Method for computing PCA (Caution: GLRM is currently experimental and unstable)", values = { "GramSVD", "Power", "Randomized", "GLRM" })   // TODO: pull out of categorical class
     public PCAParameters.Method pca_method;
-
+  
+    @API(help = "Implementation for computing PCA (via SVD or EVD)", values = { "MTJ_EVD_DENSEMATRIX", "MTJ_EVD_SYMMMATRIX", "MTJ_SVD_DENSEMATRIX", "JAMA" })
+    public PCAImplementation pca_implementation;
+    
     @API(help = "Rank of matrix approximation", required = true, direction = API.Direction.INOUT, gridable = true)
     public int k;
 
