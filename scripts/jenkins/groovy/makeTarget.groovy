@@ -36,15 +36,55 @@ def call(body) {
 
   try {
     execMake(config.customBuildAction, config.h2o3dir)
-  } finally {
+  } catch (Exception e) {
     if (config.hasJUnit) {
-      final GString findCmd = "find ${config.h2o3dir} -type f -name '*.xml'"
-      final GString replaceCmd = "${findCmd} -exec sed -i 's/&#[0-9]\\+;//g' {} +"
-      echo "Post-processing following test result files:"
-      sh findCmd
-      sh replaceCmd
-      junit testResults: "${config.h2o3dir}/**/test-results/*.xml", allowEmptyResults: true, keepLongStdio: true
+      final String safeJobName = env.JOB_NAME.replace('/', '_')
+      final String timestamp = sh(script: 'date +%s', returnStdout: true).trim()
+      // FIXME set correct s3 root
+      final String s3root = 's3://test.0xdata.com/intermittents/jenkins/' // 's3://ai.h2o.tests/jenkins/'
+      final String intermittentsOutputFile = "Failed_PyUnits_from_${safeJobName}.csv"
+      final String intermittentsOutputDict = "Failed_PyUnits_summary_dict_from_${safeJobName}.txt"
+      final String awsName = "${s3root}${intermittentsOutputFile}"
+      final String awsDictName = "${s3root}${intermittentsOutputDict}"
+      final String dailyOutputFile = "Daily_PyUnits_Failed_from_${safeJobName}\"_\"${timestamp}.csv"
+      sh """
+        cd ${config.h2o3dir}/scripts
+
+        echo "*********************************************"
+        echo "***  PostBuild: Looking for intermittents ***"
+        echo "*********************************************"
+        
+        echo "Output file name will be ${intermittentsOutputFile}"
+        
+        rm -f ${intermittentsOutputFile}
+        rm -f ${intermittentsOutputDict}
+        
+        if [ "\$(s3cmd ls ${awsName} | grep ${awsName})" ]; then
+          s3cmd get ${awsName}
+        fi
+        if [ "\$(s3cmd ls ${awsDictName} | grep ${awsDictName})" ]; then
+          s3cmd get ${awsDictName}
+        fi
+
+        # FIXME this should be already installed in system-wide python2
+        virtualenv --python=python2 ~/env
+        . ~/env/bin/activate
+        pip install pytz python-dateutil
+
+        python --version
+        python scrapeForIntermittents.py ${timestamp} ${env.JOB_NAME} ${env.BUILD_ID} ${env.GIT_SHA} ${env.NODE_NAME} PyUnit ${env.JENKINS_URL} ${intermittentsOutputFile} ${intermittentsOutputDict} 2 ${dailyOutputFile}
+        
+        s3cmd put ${intermittentsOutputFile} ${s3root}
+        s3cmd put ${intermittentsOutputDict} ${s3root}
+        s3cmd put ${dailyOutputFile} ${s3root}
+        
+        rm -f Failed_*
+        rm -f Daily_*
+        rm -f tempText
+      """
     }
+    throw e
+  } finally {
     if (config.archiveFiles) {
       archiveStageFiles(config.h2o3dir, FILES_TO_ARCHIVE, FILES_TO_EXCLUDE)
     }
@@ -52,6 +92,14 @@ def call(body) {
       echo "###### Archiving additional files: ######"
       echo "${config.archiveAdditionalFiles.join(', ')}"
       archiveStageFiles(config.h2o3dir, config.archiveAdditionalFiles, config.excludeAdditionalFiles)
+    }
+    if (config.hasJUnit) {
+      final GString findCmd = "find ${config.h2o3dir} -type f -name '*.xml'"
+      final GString replaceCmd = "${findCmd} -exec sed -i 's/&#[0-9]\\+;//g' {} +"
+      echo "Post-processing following test result files:"
+      sh findCmd
+      sh replaceCmd
+      junit testResults: "${config.h2o3dir}/**/test-results/*.xml", allowEmptyResults: false, keepLongStdio: true
     }
   }
 }
