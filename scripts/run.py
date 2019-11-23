@@ -292,7 +292,7 @@ class H2OCloudNode(object):
         self.h2o_jar = h2o_jar
         self.ip = ip
         self.base_port = base_port
-        self.xmx = xmx
+        self.xmx = "1g"
         self.cp = cp
         self.output_dir = output_dir
         self.ldap_config_path = ldap_config_path
