@@ -33,7 +33,11 @@ public class TargetEncoderModel extends Model<TargetEncoderModel, TargetEncoderM
   public static class TargetEncoderParameters extends Model.Parameters {
     public boolean _blending = false;
     public BlendingParams _blending_parameters = TargetEncoder.DEFAULT_BLENDING_PARAMS;
+    // TODO just for the sake of this PR I'm not removing _blending_parameters. It will be probably removed in a separate PR.
+    public double _k = TargetEncoder.DEFAULT_BLENDING_PARAMS.getK();
+    public double _f = TargetEncoder.DEFAULT_BLENDING_PARAMS.getF();
     public TargetEncoder.DataLeakageHandlingStrategy _data_leakage_handling = TargetEncoder.DataLeakageHandlingStrategy.None;
+    public double _noise_level = 0;
     
     @Override
     public String algoName() {
@@ -54,7 +58,11 @@ public class TargetEncoderModel extends Model<TargetEncoderModel, TargetEncoderM
     public long progressUnits() {
       return 0;
     }
-    
+
+    @Override
+    public String toString() {
+      return "TargetEncoderParameters: _blending = " + _blending + ", _data_leakage_handling = " + _data_leakage_handling + ", _k = " + _k + ", _f = " + _f;
+    }
   }
 
   public static class TargetEncoderOutput extends Model.Output {
