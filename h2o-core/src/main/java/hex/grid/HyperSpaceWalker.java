@@ -4,6 +4,7 @@ import hex.Model;
 import hex.ModelParametersBuilderFactory;
 import hex.ScoreKeeper;
 import hex.ScoringInfo;
+import hex.grid.filter.*;
 import water.exceptions.H2OIllegalArgumentException;
 import water.util.PojoUtils;
 
@@ -39,7 +40,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
      * @return  true if the iterator can produce one more model parameters configuration.
      */
     boolean hasNext(Model previousModel);
-
+    
     void reset();
 
     /**
@@ -60,8 +61,11 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
     /**
      * Inform the Iterator that a model build failed in case it needs to adjust its internal state.
      * @param failedModel
+     * @deprecated As `max_models` early stopping was moved from {@link HyperSpaceIterator},
+     * there is no need to manage number of successfully build models from within iterator
      */
-    void modelFailed(Model failedModel);
+    @Deprecated
+    default void modelFailed(Model failedModel) {};
 
     /**
      * Returns current "raw" state of iterator.
@@ -71,6 +75,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
      * @return  array of "untyped" values representing configuration of grid parameters
      */
     Object[] getCurrentRawParameters();
+
   } // interface HyperSpaceIterator
 
   /**
@@ -156,7 +161,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
     /**
      * Hyper space description - in this case only dimension and possible values.
      */
-    final protected Map<String, Object[]> _hyperParams;
+    final protected Map<String, Object[]> _hyperParamsGrid;
 
     protected boolean _set_model_seed_from_search_seed = false;  // true if model parameter seed is set to default value and false otherwise
     long model_number = 0l;   // denote model number
@@ -198,16 +203,16 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
     /**
      *
      * @param paramsBuilderFactory
-     * @param hyperParams
+     * @param hyperParamsGrid
      */
     public BaseWalker(MP params,
-                      Map<String, Object[]> hyperParams,
+                      Map<String, Object[]> hyperParamsGrid,
                       ModelParametersBuilderFactory<MP> paramsBuilderFactory,
                       C search_criteria) {
       _params = params;
-      _hyperParams = hyperParams;
+      _hyperParamsGrid = hyperParamsGrid;
       _paramsBuilderFactory = paramsBuilderFactory;
-      _hyperParamNames = hyperParams.keySet().toArray(new String[0]);
+      _hyperParamNames = hyperParamsGrid.keySet().toArray(new String[0]);
       _maxHyperSpaceSize = computeMaxSizeOfHyperSpace();
       _search_criteria = search_criteria;
 
@@ -222,9 +227,9 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
 
       // if a parameter is specified in both model parameter and hyper-parameter, this is only allowed if the
       // parameter value is set to be default.  Otherwise, an exception will be thrown.
-      for (String key : hyperParams.keySet()) {
+      for (String key : hyperParamsGrid.keySet()) {
         // Throw if the user passed an empty value list:
-        Object[] values = hyperParams.get(key);
+        Object[] values = hyperParamsGrid.get(key);
         if (0 == values.length)
           throw new H2OIllegalArgumentException("Grid search hyperparameter value list is empty for hyperparameter: " + key);
 
@@ -288,6 +293,10 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
       return _params;
     }
 
+    public Map<String, Object[]> getHyperParamsGrid() {
+      return _hyperParamsGrid;
+    }
+
     @Override
     public ModelParametersBuilderFactory<MP> getParametersBuilderFactory() {
       return _paramsBuilderFactory;
@@ -311,7 +320,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
 
     protected long computeMaxSizeOfHyperSpace() {
       long work = 1;
-      for (Map.Entry<String, Object[]> p : _hyperParams.entrySet()) {
+      for (Map.Entry<String, Object[]> p : _hyperParamsGrid.entrySet()) {
         if (p.getValue() != null) {
           work *= p.getValue().length;
         }
@@ -319,10 +328,10 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
       return work;
     }
 
-    /** Given a list of indices for the hyperparameter values return an Object[] of the actual values. */
-    protected Object[] hypers(int[] hidx, Object[] hypers) {
+    /** Given a list of indices for the hyperparameter values return an ordered Object[] of the actual values to represent single permutation. */
+    protected Object[] permutation(int[] hidx, Object[] hypers) {
       for (int i = 0; i < hidx.length; i++) {
-        hypers[i] = _hyperParams.get(_hyperParamNames[i])[hidx[i]];
+        hypers[i] = _hyperParamsGrid.get(_hyperParamNames[i])[hidx[i]];
       }
       return hypers;
     }
@@ -330,22 +339,24 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
     protected int integerHash(int[] ar) {
       Integer[] hashMe = new Integer[ar.length];
       for (int i = 0; i < ar.length; i++)
-        hashMe[i] = ar[i] * _hyperParams.get(_hyperParamNames[i]).length;
+        hashMe[i] = ar[i] * _hyperParamsGrid.get(_hyperParamNames[i]).length;
       return Arrays.deepHashCode(hashMe);
     }
   }
 
   /**
    * Hyperparameter space walker which visits each combination of hyperparameters in order.
+   * 
+   * @params permutationFilter for details see javadoc for {@link RandomDiscreteValueWalker}
    */
   public static class CartesianWalker<MP extends Model.Parameters>
           extends BaseWalker<MP, HyperSpaceSearchCriteria.CartesianSearchCriteria> {
 
     public CartesianWalker(MP params,
-                           Map<String, Object[]> hyperParams,
+                           Map<String, Object[]> hyperParamsGrid,
                            ModelParametersBuilderFactory<MP> paramsBuilderFactory,
-                           HyperSpaceSearchCriteria.CartesianSearchCriteria search_criteria) {
-      super(params, hyperParams, paramsBuilderFactory, search_criteria);
+                           HyperSpaceSearchCriteria.CartesianSearchCriteria searchCriteria) {
+      super(params, hyperParamsGrid, paramsBuilderFactory, searchCriteria);
     }
 
     @Override
@@ -361,7 +372,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
           _currentHyperparamIndices = _currentHyperparamIndices != null ? nextModelIndices(_currentHyperparamIndices) : new int[_hyperParamNames.length];
           if (_currentHyperparamIndices != null) {
             // Fill array of hyper-values
-            Object[] hypers = hypers(_currentHyperparamIndices, new Object[_hyperParamNames.length]);
+            Object[] hypers = permutation(_currentHyperparamIndices, new Object[_hyperParamNames.length]);
             // Get clone of parameters
             MP commonModelParams = (MP) _params.clone();
             // Fill model parameters
@@ -380,7 +391,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
           }
           int[] hyperparamIndices = _currentHyperparamIndices;
           for (int i = 0; i < hyperparamIndices.length; i++) {
-            if (hyperparamIndices[i] + 1 < _hyperParams.get(_hyperParamNames[i]).length) {
+            if (hyperparamIndices[i] + 1 < _hyperParamsGrid.get(_hyperParamNames[i]).length) {
               return true;
             }
           }
@@ -400,16 +411,11 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
         public int max_models() { return _maxHyperSpaceSize > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int)_maxHyperSpaceSize; }
 
         @Override
-        public void modelFailed(Model failedModel) {
-          // nada
-        }
-
-        @Override
         public Object[] getCurrentRawParameters() {
           Object[] hyperValues = new Object[_hyperParamNames.length];
-          return hypers(_currentHyperparamIndices, hyperValues);
+          return permutation(_currentHyperparamIndices, hyperValues);
         }
-      }; // anonymous HyperSpaceIterator class
+      };
     } // iterator()
 
     /**
@@ -421,7 +427,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
       // Find the next parm to flip
       int i;
       for (i = 0; i < hyperparamIndices.length; i++) {
-        if (hyperparamIndices[i] + 1 < _hyperParams.get(_hyperParamNames[i]).length) {
+        if (hyperparamIndices[i] + 1 < _hyperParamsGrid.get(_hyperParamNames[i]).length) {
           break;
         }
       }
@@ -450,35 +456,33 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
     private Set<Integer> _visitedPermutationHashes = new LinkedHashSet<>(); // for fast dupe lookup
 
     public RandomDiscreteValueWalker(MP params,
-                                     Map<String, Object[]> hyperParams,
+                                     Map<String, Object[]> hyperParamsGrid,
                                      ModelParametersBuilderFactory<MP> paramsBuilderFactory,
-                                     HyperSpaceSearchCriteria.RandomDiscreteValueSearchCriteria search_criteria) {
-      super(params, hyperParams, paramsBuilderFactory, search_criteria);
-
-      if (-1 == search_criteria.seed())
+                                     HyperSpaceSearchCriteria.RandomDiscreteValueSearchCriteria searchCriteria) {
+      super(params, hyperParamsGrid, paramsBuilderFactory, searchCriteria);
+      if (-1 == searchCriteria.seed())
         random = new Random();                       // true random
       else
-        random = new Random(search_criteria.seed()); // seeded repeatable pseudorandom
+        random = new Random(searchCriteria.seed()); // seeded repeatable pseudorandom
     }
 
     /** Based on the last model, the given array of ScoringInfo, and our stopping criteria should we stop early? */
     @Override
     public boolean stopEarly(Model model, ScoringInfo[] sk) {
-      return ScoreKeeper.stopEarly(ScoringInfo.scoreKeepers(sk),
-              search_criteria().stopping_rounds(),
-              ScoreKeeper.ProblemType.forSupervised(model._output.isClassifier()),
-              search_criteria().stopping_metric(),
-              search_criteria().stopping_tolerance(), "grid's best", true);
+      return model != null &&
+              ScoreKeeper.stopEarly(ScoringInfo.scoreKeepers(sk),
+               search_criteria().stopping_rounds(),
+               ScoreKeeper.ProblemType.forSupervised(model._output.isClassifier()),
+               search_criteria().stopping_metric(),
+               search_criteria().stopping_tolerance(), "grid's best", true);
     }
 
     @Override
     public HyperSpaceIterator<MP> iterator() {
+
       return new HyperSpaceIterator<MP>() {
         /** Current hyper params permutation. */
         private int[] _currentHyperparamIndices = null;
-
-        /** One-based count of the permutations we've visited, primarily used as an index into _visitedHyperparamIndices. */
-        private int _currentPermutationNum = 0;
 
         /** Start time of this grid */
         private long _start_time = System.currentTimeMillis();
@@ -494,10 +498,9 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
           if (_currentHyperparamIndices != null) {
             _visitedPermutations.add(_currentHyperparamIndices);
             _visitedPermutationHashes.add(integerHash(_currentHyperparamIndices));
-            _currentPermutationNum++; // NOTE: 1-based counting
 
             // Fill array of hyper-values
-            Object[] hypers = hypers(_currentHyperparamIndices, new Object[_hyperParamNames.length]);
+            Object[] hypers = permutation(_currentHyperparamIndices, new Object[_hyperParamNames.length]);
             // Get clone of parameters
             MP commonModelParams = (MP) _params.clone();
             // Fill model parameters
@@ -514,7 +517,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
 
               // set max_runtime_secs
               double timeleft = this.time_remaining_secs();
-              if (timeleft > 0)  {
+              if (timeleft > 0) {
                 if (params._max_runtime_secs > 0) {
                   params._max_runtime_secs = min(params._max_runtime_secs, timeleft);
                 } else {
@@ -534,15 +537,12 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
           // we compare _visitedPermutationHashes.size() to _maxHyperSpaceSize because we want to stop when we have attempted each combo.
           //
           // _currentPermutationNum is 1-based
-          return (_visitedPermutationHashes.size() < _maxHyperSpaceSize &&
-                  (search_criteria().max_models() == 0 || _currentPermutationNum < search_criteria().max_models())
-          );
+          return _visitedPermutationHashes.size() < _maxHyperSpaceSize;
         }
 
         @Override
         public void reset() {
           _start_time = System.currentTimeMillis();
-          _currentPermutationNum = 0;
           _currentHyperparamIndices = null;
           _visitedPermutations.clear();
           _visitedPermutationHashes.clear();
@@ -562,19 +562,11 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
         }
 
         @Override
-        public void modelFailed(Model failedModel) {
-          // Leave _visitedPermutations, _visitedPermutationHashes and _currentHyperparamIndices alone
-          // so we don't revisit bad parameters. Note that if a model build fails for other reasons we
-          // won't retry.
-          _currentPermutationNum--;
-        }
-
-        @Override
         public Object[] getCurrentRawParameters() {
           Object[] hyperValues = new Object[_hyperParamNames.length];
-          return hypers(_currentHyperparamIndices, hyperValues);
+          return permutation(_currentHyperparamIndices, hyperValues);
         }
-      }; // anonymous HyperSpaceIterator class
+      };
     } // iterator()
 
     /**
@@ -588,7 +580,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
       do {
         // generate random indices
         for (int i = 0; i < _hyperParamNames.length; i++) {
-          hyperparamIndices[i] = random.nextInt(_hyperParams.get(_hyperParamNames[i]).length);
+          hyperparamIndices[i] = random.nextInt(_hyperParamsGrid.get(_hyperParamNames[i]).length);
         }
         // check for aliases and loop if we've visited this combo before
       } while (_visitedPermutationHashes.contains(integerHash(hyperparamIndices)));
