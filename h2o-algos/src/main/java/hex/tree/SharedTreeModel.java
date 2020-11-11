@@ -6,9 +6,11 @@ import static hex.genmodel.GenModel.createAuxKey;
 import static hex.genmodel.algos.tree.SharedTreeMojoModel.__INTERNAL_MAX_TREE_DEPTH;
 
 import hex.genmodel.CategoricalEncoding;
+import hex.genmodel.algos.tree.SharedTreeGraph;
 import hex.genmodel.algos.tree.SharedTreeMojoModel;
 import hex.genmodel.algos.tree.SharedTreeNode;
 import hex.genmodel.algos.tree.SharedTreeSubgraph;
+import hex.genmodel.tools.JgraphtPrintMojo;
 import hex.glm.GLMModel;
 import hex.util.LinearAlgebraUtils;
 import water.*;
@@ -24,12 +26,13 @@ import water.util.*;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 public abstract class SharedTreeModel<
         M extends SharedTreeModel<M, P, O>,
         P extends SharedTreeModel.SharedTreeParameters,
         O extends SharedTreeModel.SharedTreeOutput
-        > extends Model<M, P, O> implements Model.LeafNodeAssignment, Model.GetMostImportantFeatures, Model.FeatureFrequencies {
+        > extends Model<M, P, O> implements Model.LeafNodeAssignment, Model.GetMostImportantFeatures, Model.FeatureFrequencies, ModelWithVisualization {
 
   @Override
   public String[] getMostImportantFeatures(int n) {
@@ -653,6 +656,25 @@ public abstract class SharedTreeModel<
     }
     final CompressedTree auxCompressedTree = _output._treeKeysAux[tidx][cls].get();
     return _output._treeKeys[tidx][cls].get().toSharedTreeSubgraph(auxCompressedTree, _output._names, _output._domains);
+  }
+
+  /**
+   * Provides a visualization of tree based models when called from Flow.
+   * @param output output file name
+   */
+  @Override
+  public void visualize(String output) {
+    List<SharedTreeSubgraph> subgraphList = new ArrayList<>();
+    for (int i = 0; i < this._parms._ntrees; i++) {
+      subgraphList.add(this.getSharedTreeSubgraph(i, 0));
+    }
+    try {
+      SharedTreeGraph sharedTreeGraph = new SharedTreeGraph(subgraphList);
+      JgraphtPrintMojo jgraphtPrintMojo = new JgraphtPrintMojo(output, sharedTreeGraph);
+      jgraphtPrintMojo.run();
+    } catch (Exception e) {
+      throw new RuntimeException("Shared tree model visualization failed.", e);
+    }
   }
 
   //--------------------------------------------------------------------------------------------------------------------

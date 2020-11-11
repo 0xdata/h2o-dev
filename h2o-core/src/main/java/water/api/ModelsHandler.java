@@ -1,6 +1,7 @@
 package water.api;
 
 import hex.Model;
+import hex.ModelWithVisualization;
 import hex.PartialDependence;
 import water.*;
 import water.api.schemas3.*;
@@ -12,10 +13,9 @@ import water.fvec.Frame;
 import water.persist.Persist;
 import water.util.FileUtils;
 import water.util.JCodeGen;
+import water.util.ModelPngWriter;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.OutputStream;
+import java.io.*;
 import java.net.URI;
 import java.util.*;
 
@@ -209,7 +209,16 @@ public class ModelsHandler<I extends ModelsHandler.Models, S extends SchemaV3<I,
     if( missing.size() != 0 ) throw new H2OKeysNotFoundArgumentException("(none)", missing.toArray(new String[missing.size()]));
     return models;
   }
-
+  
+  @SuppressWarnings("unused") // called through reflection by RequestServer
+  public StreamingSchema exportTreeVisualization(int version, ModelExportV3 mexport) {
+    Model model = getFromDKV("model_id", mexport.model_id.key());
+    if (!(model instanceof ModelWithVisualization))
+      throw new IllegalArgumentException("Trying to visualize model that does not support it.");
+    String filename = JCodeGen.toJavaId(mexport.model_id.key().toString()) + ".zip";
+    return new StreamingSchema(new ModelPngWriter((ModelWithVisualization) model), filename);
+  }
+  
   @SuppressWarnings("unused") // called through reflection by RequestServer
   public ModelsV3 importModel(int version, ModelImportV3 mimport) {
     ModelsV3 s = Schema.newInstance(ModelsV3.class);
