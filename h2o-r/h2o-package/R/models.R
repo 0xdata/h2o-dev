@@ -5345,3 +5345,12 @@ h2o.reset_threshold <- function(object, threshold) {
     return(NULL)
   }
 }
+
+#' Get a mapping between columns and their domains
+#' @param model an h2o model
+#' @return list containing a mapping from column to its domains (levels)
+.h2o.__get_domain_mapping <- function(model) {
+  domains <- model@model$domains
+  names(domains) <- model@model$names
+  return(domains)
+}

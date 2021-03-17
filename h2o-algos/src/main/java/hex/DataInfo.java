@@ -778,15 +778,15 @@ public class DataInfo extends Keyed<DataInfo> {
         int jj = getCategoricalId(i, j);
         if(jj < 0)
           continue;
-        res[k++] = _adaptedFrame._names[i] + "." + vecs[i].domain()[j];
+        res[k++] = _adaptedFrame._names[i] + "{" + vecs[i].domain()[j] + "}";
       }
       if (_catMissing[i] && getCategoricalId(i, -1) >=0)
-        res[k++] = _adaptedFrame._names[i] + ".missing(NA)";
+        res[k++] = _adaptedFrame._names[i] + "{missing(NA)}";
       if( vecs[i] instanceof InteractionWrappedVec ) {
         InteractionWrappedVec iwv = (InteractionWrappedVec)vecs[i];
         if( null!=iwv.missingDomains() ) {
           for(String s: iwv.missingDomains() )
-            res[k++] = s+".missing(NA)";
+            res[k++] = s + "{missing(NA)}";
         }
       }
     }
@@ -802,7 +802,7 @@ public class DataInfo extends Keyed<DataInfo> {
           for (int j = v._useAllFactorLevels?0:1; j < v.domain().length; ++j) {
             if (getCategoricalIdFromInteraction(_cats+i, j) < 0)
               continue;
-            res[k++] = _adaptedFrame._names[i+_cats] + "." + v.domain()[j];
+            res[k++] = _adaptedFrame._names[i+_cats] + "{" + v.domain()[j] + "}";
           }
         } else
           res[k++] = _adaptedFrame._names[i+_cats];
@@ -870,7 +870,7 @@ public class DataInfo extends Keyed<DataInfo> {
       for (int value : coefOriginalIndices) coefOriginalIndicesList.add(value);
       int end = coefOriginalIndicesList.lastIndexOf(coefOriginalIndices[i]);
       String prefix = findLongestCommonPrefix(Arrays.copyOfRange(coefNames(), i, end + 1));
-      if (".".equals(prefix.substring(prefix.length() - 1))) {
+      if ("{".equals(prefix.substring(prefix.length() - 1))) {
         prefix = prefix.substring(0, prefix.length() - 1);
       }
       originalNames[j] = prefix;

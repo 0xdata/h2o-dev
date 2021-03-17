@@ -1730,6 +1730,15 @@ class ModelBase(h2o_meta(Keyed)):
         """DEPRECATED. Use :meth:`scoring_history` instead."""
         return self.scoring_history()
 
+    def get_domain_mapping(self):
+        """
+        Get a mapping between columns and their domains.
+
+        :return: Dictionary containing a mapping column -> factors
+        """
+        output = self._model_json["output"]
+        return dict(zip(output["names"], output["domains"]))
+
 
 def _get_mplot3d_pyplot(function_name):
     try:
