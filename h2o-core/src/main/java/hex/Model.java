@@ -384,6 +384,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     public String _weights_column;
     public String _offset_column;
     public String _fold_column;
+    public String _treatment_column;
     
     // Check for constant response
     public boolean _check_constant_response = true;
@@ -481,6 +482,8 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     public int _gainslift_bins = -1;
     
     public MultinomialAucType _auc_type = MultinomialAucType.AUTO;
+    
+    public AUUC.AUUCType _auuc_type = AUUC.AUUCType.AUTO;
 
     // Public no-arg constructor for reflective creation
     public Parameters() { _ignore_const_cols = defaultDropConsCols(); }
@@ -492,7 +495,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     public final Frame valid() { return _valid==null ? null : _valid.get(); }
 
     public String[] getNonPredictors() {
-        return Arrays.stream(new String[]{_weights_column, _offset_column, _fold_column, _response_column})
+        return Arrays.stream(new String[]{_weights_column, _offset_column, _fold_column, _response_column, _treatment_column})
                 .filter(Objects::nonNull)
                 .toArray(String[]::new);
     }
@@ -943,6 +946,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       _hasOffset = b.hasOffsetCol();
       _hasWeights = b.hasWeightCol();
       _hasFold = b.hasFoldCol();
+      _hasTreatment = b.hasTreatmentCol();
       _distribution = b._distribution;
       _priorClassDist = b._priorClassDist;
       _reproducibility_information_table = createReproducibilityInformationTable(b);
@@ -952,7 +956,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
 
     /** Returns number of input features (OK for most supervised methods, need to override for unsupervised!) */
     public int nfeatures() {
-      return _names.length - (_hasOffset?1:0)  - (_hasWeights?1:0) - (_hasFold?1:0) - (isSupervised()?1:0);
+      return _names.length - (_hasOffset?1:0)  - (_hasWeights?1:0) - (_hasFold?1:0) - (_hasTreatment ?1:0) - (isSupervised()?1:0);
     }
     /** Returns features used by the model */
     public String[] features() {
@@ -1024,31 +1028,42 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     protected boolean _hasOffset; // weights and offset are kept at designated position in the names array
     protected boolean _hasWeights;// only need to know if we have them
     protected boolean _hasFold;// only need to know if we have them
+    protected boolean _hasTreatment;
     public boolean hasOffset  () { return _hasOffset;}
     public boolean hasWeights () { return _hasWeights;}
     public boolean hasFold () { return _hasFold;}
+    public boolean hasTreatment() { return _hasTreatment;}
     public boolean hasResponse() { return isSupervised(); }
     public String responseName() { return isSupervised()?_names[responseIdx()]:null;}
     public String weightsName () { return _hasWeights ?_names[weightsIdx()]:null;}
     public String offsetName  () { return _hasOffset ?_names[offsetIdx()]:null;}
     public String foldName  () { return _hasFold ?_names[foldIdx()]:null;}
     public InteractionBuilder interactionBuilder() { return null; }
-    // Vec layout is  [c1,c2,...,cn,w?,o?,r], cn are predictor cols, r is response, w and o are weights and offset, both are optional
+    // Vec layout is  [c1,c2,...,cn, w?, o?, f?, u?, r]
+    // cn are predictor cols, r is response, w is weights, o is offset, f is fold and t is treatment - these are optional
     public int weightsIdx() {
       if(!_hasWeights) return -1;
-      return _names.length - (isSupervised()?1:0) - (hasOffset()?1:0) - 1 - (hasFold()?1:0);
+      return _names.length - (isSupervised()?1:0) - (hasOffset()?1:0) - 1 - (hasFold()?1:0) - (hasTreatment()?1:0);
     }
+    
     public int offsetIdx() {
       if(!_hasOffset) return -1;
-      return _names.length - (isSupervised()?1:0) - (hasFold()?1:0) - 1;
+      return _names.length - (isSupervised()?1:0) - (hasFold()?1:0) - 1 - (hasTreatment()?1:0);
     }
+    
     public int foldIdx() {
       if(!_hasFold) return -1;
-      return _names.length - (isSupervised()?1:0) - 1;
+      return _names.length - (isSupervised()?1:0) - 1 -  (hasTreatment()?1:0);
     }
+    
     public int responseIdx() {
       if(!isSupervised()) return -1;
       return _names.length-1;
+    } 
+    
+    public int treatmentIdx() {
+      if(!_hasTreatment) return -1;
+      return _names.length - (isSupervised()?1:0) - 1;
     }
 
     /** Names of levels for a categorical response column. */
@@ -1059,8 +1074,10 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
 
     /** Is this model a classification model? (v. a regression or clustering model) */
     public boolean isClassifier() { return isSupervised() && nclasses() > 1; }
+    /** Is this model a uplift binomial classification model? (v. a regression or clustering model) */
+    public  boolean isUpliftBinomialClassifier(){ return isSupervised() && nclasses() == 2 && getModelCategory().equals(ModelCategory.BinomialUplift);}
     /** Is this model a binomial classification model? (v. a regression or clustering model) */
-    public boolean isBinomialClassifier() { return isSupervised() && nclasses() == 2; }
+    public boolean isBinomialClassifier() { return isSupervised() && nclasses() == 2 && !isUpliftBinomialClassifier(); }
     /**Is this model a multinomial classification model (supervised and nclasses() > 2 */
     public boolean isMultinomialClassifier() { return isSupervised() && nclasses() > 2; }
     /** Number of classes in the response column if it is categorical and the model is supervised. */
@@ -1109,7 +1126,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     }
 
     public double defaultThreshold() {
-      if (nclasses() != 2 || _training_metrics == null)
+      if (nclasses() != 2 || _training_metrics == null || _training_metrics instanceof ModelMetricsBinomialUplift)
         return 0.5;
       if(_defaultThreshold == -1) {
         if (_validation_metrics != null && ((ModelMetricsBinomial) _validation_metrics)._auc != null)
@@ -1193,7 +1210,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
   public ModelMetrics addMetrics(ModelMetrics mm) { return addModelMetrics(mm); }
 
   public abstract ModelMetrics.MetricBuilder makeMetricBuilder(String[] domain);
-
+  
   /** Full constructor */
   public Model(Key<M> selfKey, P parms, O output) {
     super(selfKey);
@@ -1525,6 +1542,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     final String offset = parms._offset_column;
     final String fold = parms._fold_column;
     final String response = parms._response_column;
+    final String treatment = parms._treatment_column;
 
     // whether we need to be careful with categorical encoding - the test frame could be either in original state or in encoded state
     // keep in sync with FrameUtils.categoricalEncoder: as soon as a categorical column has been encoded, we should check here.
@@ -1543,7 +1561,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
         // As soon as the test frame contains at least one original pre-encoding predictor,
         // then we consider the frame as valid for predictions, and we'll later fill missing columns with NA
         Set<String> required = new HashSet<>(Arrays.asList(origNames));
-        required.removeAll(Arrays.asList(response, weights, fold));
+        required.removeAll(Arrays.asList(response, weights, fold, treatment));
         for (String name : test.names()) {
           if (required.contains(name)) {
             match = true;
@@ -1578,6 +1596,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       boolean isWeights = weights != null && names[i].equals(weights);
       boolean isOffset = offset != null && names[i].equals(offset);
       boolean isFold = fold != null && names[i].equals(fold);
+      boolean isTreatment = treatment != null && names[i].equals(treatment);
       // If a training set column is missing in the test set, complain (if it's ok, fill in with NAs (or 0s if it's a fold-column))
       if (vec == null) {
         if (isResponse && computeMetrics)
@@ -1589,6 +1608,9 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
             vec = test.anyVec().makeCon(1);
             toDelete.put(vec._key, "adapted missing vectors");
             msgs.add(H2O.technote(1, "Test/Validation dataset is missing weights column '" + names[i] + "' (needed because a response was found and metrics are to be computed): substituting in a column of 1s"));
+          }
+          else if (isTreatment && computeMetrics) {
+            throw new IllegalArgumentException("Test/Validation dataset is missing treatment column '" + treatment + "'");
           }
         } else if (expensive) {   // generate warning even for response columns.  Other tests depended on this.
           final double defval;
@@ -1604,7 +1626,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
           vec = test.anyVec().makeCon(defval);
           toDelete.put(vec._key, "adapted missing vectors");
           String str = "Test/Validation dataset is missing column '" + names[i] + "': substituting in a column of " + defval;
-          if (isResponse || isWeights || isFold)
+          if (isResponse || isWeights || isFold || isTreatment)
             Log.info(str); // we are doing a "pure" predict (computeMetrics is false), don't complain to the user
           else
             msgs.add(str);
@@ -1645,7 +1667,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       test.restructure(names, vvecs, good);
 
     if (expensive && checkCategoricals) {
-      final boolean hasCategoricalPredictors = hasCategoricalPredictors(test, response, weights, offset, fold, names, domains);
+      final boolean hasCategoricalPredictors = hasCategoricalPredictors(test, response, weights, offset, fold, treatment, names, domains);
 
       // check if we first need to expand categoricals before calling this method again
       if (hasCategoricalPredictors) {
@@ -1663,7 +1685,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
 
   private static boolean hasCategoricalPredictors(final Frame frame, final String responseName,
                                            final String wieghtsName, final String offsetName,
-                                           final String foldName, final String[] names,
+                                           final String foldName, final String treatmentName, final String[] names,
                                            final String[][] domains) {
 
     boolean haveCategoricalPredictors = false;
@@ -1678,6 +1700,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       if (frame.names()[i].equals(wieghtsName)) continue;
       if (frame.names()[i].equals(offsetName)) continue;
       if (frame.names()[i].equals(foldName)) continue;
+      if (frame.names()[i].equals(treatmentName)) continue;
       // either the column of the test set is categorical (could be a numeric col that's already turned into a factor)
       if (frame.vec(i).get_type() == Vec.T_CAT) {
         haveCategoricalPredictors = true;
@@ -1789,7 +1812,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
 
     // Output is in the model's domain, but needs to be mapped to the scored
     // dataset's domain.
-    if(_output.isClassifier() && computeMetrics) {
+    if(_output.isClassifier() && computeMetrics && !_output.hasTreatment()) {
       /*
       if (false) {
         assert(mdomain != null); // label must be categorical
@@ -1887,7 +1910,7 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
   protected String[][] makeScoringDomains(Frame adaptFrm, boolean computeMetrics, String[] names) {
     String[][] domains = new String[names.length][];
     Vec response = adaptFrm.lastVec();
-    domains[0] = names.length == 1 ? null : !computeMetrics ? _output._domains[_output._domains.length - 1] : response.domain();
+    domains[0] = names.length == 1 || _output.hasTreatment() ? null : ! computeMetrics ? _output._domains[_output._domains.length - 1] : response.domain();
     if (_parms._distribution == DistributionFamily.quasibinomial) {
       domains[0] = new VecUtils.CollectDoubleDomain(null,2).doAll(response).stringDomain(response.isInt());
     }
@@ -1898,13 +1921,21 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
     final int nc = output.nclasses();
     final int ncols = nc==1?1:nc+1; // Regression has 1 predict col; classification also has class distribution
     String [] names = new String[ncols];
-    names[0] = "predict";
+    if(output.hasTreatment()){
+      names[0] = "uplift_predict";
+    } else {
+      names[0] = "predict";
+    }
     for(int i = 1; i < names.length; ++i) {
       names[i] = output.classNames()[i - 1];
       // turn integer class labels such as 0, 1, etc. into p0, p1, etc.
       try {
         Integer.valueOf(names[i]);
-        names[i] = "p" + names[i];
+        if(output.hasTreatment()){
+          names[i] = i == 1? "p_y1_ct1" : "p_y1_ct0";
+        } else {
+          names[i] = "p" + names[i];
+        }
       } catch (Throwable t) {
         // do nothing, non-integer names are fine already
       }
@@ -2176,7 +2207,9 @@ public abstract class Model<M extends Model<M,P,O>, P extends Model.Parameters, 
       if (_parms._balance_classes)
         GenModel.correctProbabilities(scored, _output._priorClassDist, _output._modelClassDist);
       //assign label at the very end (after potentially correcting probabilities)
-      scored[0] = hex.genmodel.GenModel.getPrediction(scored, _output._priorClassDist, tmp, defaultThreshold());
+      if(!_output.hasTreatment()) {
+        scored[0] = hex.genmodel.GenModel.getPrediction(scored, _output._priorClassDist, tmp, defaultThreshold());
+      }
     }
   }
 

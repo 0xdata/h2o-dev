@@ -103,6 +103,7 @@ class MetricsBase(h2o_meta()):
         types_w_dim = ["ModelMetricsGLRM"]
         types_w_anomaly = ['ModelMetricsAnomaly']
         types_w_cox = ['ModelMetricsRegressionCoxPH']
+        types_w_uplift = ['ModelMetricsBinomialUplift']
 
         print()
         print(metric_type + ": " + self._algo)
@@ -116,7 +117,7 @@ class MetricsBase(h2o_meta()):
         else:
             print(reported_on.format("test"))
         print()
-        if metric_type not in types_w_anomaly:
+        if metric_type not in types_w_anomaly and metric_type not in types_w_uplift:
             print("MSE: " + str(self.mse()))
             print("RMSE: " + str(self.rmse()))
         if metric_type in types_w_mean_absolute_error:
@@ -198,6 +199,9 @@ class MetricsBase(h2o_meta()):
             print("Concordance score: " + str(self.concordance()))
             print("Concordant count: " + str(self.concordance()))
             print("Tied cout: " + str(self.concordance()))
+        
+        if metric_type in types_w_uplift:
+            print("AUUC: " + str(self.auuc()))
         
         if self.custom_metric_name():
             print("{}: {}".format(self.custom_metric_name(), self.custom_metric_value()))
@@ -1462,7 +1466,6 @@ class H2OBinomialModelMetrics(MetricsBase):
         else:
             return recalls, precisions
 
-
     @property
     def fprs(self):
         """
@@ -1746,6 +1749,88 @@ class H2OBinomialModelMetrics(MetricsBase):
         return None
 
 
+class H2OBinomialUpliftModelMetrics(MetricsBase):
+    
+    def __init__(self, metric_json, on=None, algo=""):
+        super(H2OBinomialUpliftModelMetrics, self).__init__(metric_json, on, algo)
+        
+    def auuc(self):
+        """
+        Retrieve Qini AUUC value
+
+        :examples:
+        TODO
+        """
+        return self._metric_json['AUUC']
+    
+    def uplift(self, metric):
+        return self._metric_json["thresholds_and_metric_scores"][metric]
+    
+    def thresholds(self):
+        return self._metric_json["thresholds_and_metric_scores"]["thresholds"]
+
+    def n(self):
+        return self._metric_json["thresholds_and_metric_scores"]["n"]
+
+    def find_idx_by_threshold(self, threshold):
+        """
+        Retrieve the index in this metric's threshold list at which the given threshold is located.
+
+        :param threshold: Find the index of this input threshold.
+        :returns: the index
+        :raises ValueError: if no such index can be found.
+
+        :examples:
+        TODO
+        """
+        assert_is_type(threshold, numeric)
+        thresh2d = self._metric_json['thresholds_and_metric_scores']
+        # print(thresh2d)
+        for i, e in enumerate(thresh2d.cell_values):
+            t = float(e[0])
+            if abs(t - threshold) < 1e-8 * max(t, threshold):
+                return i
+        if 0 <= threshold <= 1:
+            thresholds = [float(e[0]) for i, e in enumerate(thresh2d.cell_values)]
+            threshold_diffs = [abs(t - threshold) for t in thresholds]
+            closest_idx = threshold_diffs.index(min(threshold_diffs))
+            closest_threshold = thresholds[closest_idx]
+            print("Could not find exact threshold {0}; using closest threshold found {1}."
+                  .format(threshold, closest_threshold))
+            return closest_idx
+        raise ValueError("Threshold must be between 0 and 1, but got {0} ".format(threshold))
+
+    def gains_uplift(self):
+        """Retrieve the Gains/Lift table.
+
+        :examples:
+        TODO
+        """
+        if 'gains_uplift_table' in self._metric_json:
+            return self._metric_json['gains_uplift_table']
+        return None
+
+    def plot_auuc(self, server=False, save_to_file=None, plot=True, metric='auto'):
+        if plot:
+            plt = get_matplotlib_pyplot(server)
+            if plt is None:
+                return
+            plt.ylabel('Uplift')
+            plt.xlabel('Number of data')
+            plt.title('Area under Uplift curve - '+metric)
+            uplift = self.uplift(metric)
+            n = self.n()
+            plt.plot(n, uplift, 'b-')
+            plt.axis([min(n), max(n), min(uplift), max(uplift)])
+            plt.text(max(n), max(uplift),  r'AUUC={0:.4f}'.format(self._metric_json["AUUC"]))
+            plt.grid(True)
+            plt.tight_layout()
+            if not server:
+                plt.show()
+            if save_to_file is not None:  # only save when a figure is actually plotted
+                plt.savefig(save_to_file)
+        else:
+            return self.n(), self.uplift(metric)
 
 
 class H2OAutoEncoderModelMetrics(MetricsBase):

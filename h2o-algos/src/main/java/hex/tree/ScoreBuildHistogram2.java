@@ -69,13 +69,15 @@ public class ScoreBuildHistogram2 extends ScoreBuildHistogram {
   final IcedBitSet _activeCols;
   final int _respIdx;
   final int _predsIdx;
+  final int _treatmentIdx;
 
   public ScoreBuildHistogram2(H2O.H2OCountedCompleter cc, int k, int ncols, int nbins, DTree tree, int leaf, DHistogram[][] hcs, DistributionFamily family, 
-                              int respIdx, int weightIdx, int predsIdx, int workIdx, int nidIdxs) {
-    super(cc, k, ncols, nbins, tree, leaf, hcs, family, weightIdx, workIdx, nidIdxs);
+                              int respIdx, int weightIdx, int predsIdx, int workIdx, int nidIdxs, int treatmentIdx) {
+    super(cc, k, ncols, nbins, tree, leaf, hcs, family, weightIdx, workIdx, nidIdxs, treatmentIdx);
     _numLeafs = _hcs.length;
     _respIdx = respIdx;
     _predsIdx = predsIdx;
+    _treatmentIdx = treatmentIdx;
 
     int hcslen = _hcs.length;
     IcedBitSet activeCols = new IcedBitSet(ncols);
@@ -285,9 +287,11 @@ public class ScoreBuildHistogram2 extends ScoreBuildHistogram {
 
     AtomicInteger _cidx;
 
-    ComputeHistoThread(DHistogram [] hcs, int col, int maxChunkSz,AtomicInteger cidx){
-      _lh = hcs; _col = col; _maxChunkSz = maxChunkSz;
-      _cidx = cidx;
+    ComputeHistoThread(DHistogram [] hcs, int col, int maxChunkSz,AtomicInteger cidx){ 
+        _lh = hcs;
+        _col = col;
+        _maxChunkSz = maxChunkSz;
+        _cidx = cidx;
     }
 
     @Override
@@ -300,6 +304,7 @@ public class ScoreBuildHistogram2 extends ScoreBuildHistogram {
       double[] cs = null;
       double[] resp = null;
       double[] preds = null;
+      double[] treatment = null;
       for(int i = _cidx.getAndIncrement(); i < _cids.length; i = _cidx.getAndIncrement()) {
         if (cs == null) {
           cs = MemoryManager.malloc8d(_maxChunkSz);
@@ -308,11 +313,14 @@ public class ScoreBuildHistogram2 extends ScoreBuildHistogram {
           if (_predsIdx >= 0)
             preds = MemoryManager.malloc8d(_maxChunkSz);
         }
-        computeChunk(i, cs, _ws[i], resp, preds);
+        if(_treatmentIdx >= 0){
+           treatment = MemoryManager.malloc8d(_maxChunkSz);
+        }
+        computeChunk(i, cs, _ws[i], resp, preds, treatment);
       }
     }
 
-    private void computeChunk(int id, double[] cs, double[] ws, double[] resp, double[] preds){
+    private void computeChunk(int id, double[] cs, double[] ws, double[] resp, double[] preds, double[] treatment){
       int [] nh = _nhs[id];
       int [] rs = _rss[id];
       Chunk resChk = _chks[id][_workIdx];
@@ -336,9 +344,13 @@ public class ScoreBuildHistogram2 extends ScoreBuildHistogram {
                 _chks[id][_predsIdx].getDoubles(preds, 0, len);
               }
             }
+            if(h._useUplift){
+              _chks[id][_respIdx].getDoubles(resp, 0, len);
+              _chks[id][_treatmentIdx].getDoubles(treatment, 0, len);
+            }
             extracted = true;
           }
-          h.updateHisto(ws, resp, cs, ys, preds, rs, hi, lo);
+          h.updateHisto(ws, resp, cs, ys, preds, rs, hi, lo, treatment);
         }
       }
     }
